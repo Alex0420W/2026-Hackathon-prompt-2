@@ -1,0 +1,25 @@
+# 1. Get the latest code
+cd ~/2026-Hackathon-prompt-2   # or wherever the repo is
+git pull
+
+# 2. Install deps (if not already)
+pip install -r requirements.txt
+
+# 3. Set NASS key
+echo 'NASS_API_KEY=your_nass_key_from_email' > .env
+
+# 4. Smoke test (no download, just validates plan + creds)
+HLS_BBOX="-109,36,-87,47" \
+HLS_DATE_START=2024-08-01 \
+HLS_DATE_END=2024-09-30 \
+HLS_MAX_SCENES=100 \
+HLS_MAX_CLOUD=40 \
+python scripts/download_all.py --tier earthdata --dry-run
+
+# 5. Run the real thing (~30-45 min on gigabit)
+HLS_BBOX="-109,36,-87,47" \
+HLS_DATE_START=2024-08-01 \
+HLS_DATE_END=2024-09-30 \
+HLS_MAX_SCENES=100 \
+HLS_MAX_CLOUD=40 \
+python scripts/download_all.py --tier earthdata
