@@ -1,11 +1,19 @@
 """One-shot orchestrator: download every dataset needed to train.
 
 Usage:
-    python scripts/download_all.py                # run everything not yet present
-    python scripts/download_all.py --force        # re-run even if outputs exist
-    python scripts/download_all.py --skip hls     # skip the heavy HLS chip export
-    python scripts/download_all.py --only nass    # just one step
-    python scripts/download_all.py --dry-run      # print plan, run nothing
+    python scripts/download_all.py                  # full pipeline (~overnight, includes HLS chips)
+    python scripts/download_all.py --tier mini      # NASS + USDM only (~5 min, no Earth Engine)
+    python scripts/download_all.py --tier quick     # enough to train an XGBoost model (~2 hr)
+    python scripts/download_all.py --tier full      # everything incl. HLS chips for Prithvi (~overnight)
+    python scripts/download_all.py --force          # re-run even if outputs exist
+    python scripts/download_all.py --skip hls       # skip specific step(s)
+    python scripts/download_all.py --only nass      # run only specific step(s)
+    python scripts/download_all.py --dry-run        # print plan, run nothing
+
+Tiers:
+    mini   = nass, usdm                                          → labels + drought, no EE needed
+    quick  = mini + gridmet, landsat, labels, features, check    → trains an analog-feature XGBoost
+    full   = quick + gnatsgo, hls_ndvi, hls                      → enables Prithvi+LoRA fine-tune
 
 Each step writes to a known parquet/zarr path; if that path exists and --force is
 not passed, the step is skipped (idempotent).
@@ -79,6 +87,16 @@ STEPS: list[Step] = [
          est="~1 min"),
 ]
 
+# Tier presets: which step keys belong to each tier.
+# mini  = absolute minimum to have yield labels + drought signal (no Earth Engine).
+# quick = enough to train an analog-features XGBoost model end-to-end.
+# full  = everything including the overnight HLS chip export for Prithvi fine-tuning.
+TIERS: dict[str, list[str]] = {
+    "mini":  ["nass", "usdm"],
+    "quick": ["nass", "usdm", "gridmet", "landsat", "labels", "features", "check"],
+    "full":  [s.key for s in STEPS],
+}
+
 
 # ---------- pretty printing ----------
 def hr(s: str) -> None: print(f"\n{'═' * 8} {s} {'═' * 8}")
@@ -119,23 +137,29 @@ def run_step(step: Step, dry: bool) -> bool:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--tier", choices=list(TIERS), default="full",
+                    help="preset bundle of steps (default: full). mini=NASS+USDM only; "
+                         "quick=enough to train an analog XGBoost; full=everything incl. HLS chips")
     ap.add_argument("--force", action="store_true", help="re-run steps even if outputs exist")
     ap.add_argument("--skip", action="append", default=[], help="step key(s) to skip")
     ap.add_argument("--only", action="append", default=[], help="run only these step key(s)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
+    tier_keys = set(TIERS[args.tier])
+
     # Pre-flight: print plan
-    hr("PLAN")
+    hr(f"PLAN  (tier={args.tier})")
     selected = []
     for s in STEPS:
-        if args.only and s.key not in args.only: status = "skip (--only)"
-        elif s.key in args.skip:                 status = "skip (--skip)"
-        elif not args.force and output_present(s): status = "skip (output exists)"
+        if args.only and s.key not in args.only:    status = "skip (--only)"
+        elif s.key in args.skip:                    status = "skip (--skip)"
+        elif s.key not in tier_keys:                status = f"skip (not in tier={args.tier})"
+        elif not args.force and output_present(s):  status = "skip (output exists)"
         else:
             status = "run"
             selected.append(s)
-        print(f"  [{status:24s}] {s.key:9s} {s.label}")
+        print(f"  [{status:28s}] {s.key:9s} {s.label}")
 
     if not selected:
         print("\nNothing to do.")
